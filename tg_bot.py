@@ -1,7 +1,9 @@
 import logging
-import os
+import json
+from config import BOT_TOKEN
 
 from dotenv import load_dotenv
+from datetime import date
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -24,19 +26,19 @@ TYPE, DESCRIPTION, CONTACT, CONFIRM = range(4)
 # Клавиатура для выбора типа предмета
 item_keyboard = [
     ["Компьютер", "Телефон"],
-    ["Бытовая техника", "Мебель"],
-    ["Другое"]
+    ["Бытовая техника", "Другое"],
 ]
 
 # Главная клавиатура
-main_keyboard = [["Создать заявку", "Мои заявки"], ["Помощь"]]
+main_keyboard = [["Создать заявку"], ["Помощь"]]
 
 load_dotenv()
-BOT_TOKEN = os.getenv('token', 'no_secret_token')
 # Запускаем логгирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG
 )
+request_data = {}
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение и показывает главное меню"""
@@ -135,6 +137,10 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"Тип предмета: {context.user_data['type']}\n"
             f"Описание: {context.user_data['description']}\n"
             f"Контакты: {context.user_data['contact']}")
+
+        request_data = context.user_data
+        request_data["user"] = user.full_name
+        Broadcast(request_data)
     else:
         await update.message.reply_text(
             "❌ Заявка отменена. Вы можете создать новую заявку.",
@@ -159,7 +165,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-async def show_my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+'''async def show_my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает заявки пользователя (заглушка)"""
     # В реальном боте здесь должна быть логика получения заявок пользователя из БД
     await update.message.reply_text(
@@ -168,7 +174,14 @@ async def show_my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "2. Замена экрана телефона - выполнено\n\n"
         "Здесь будет отображаться история ваших заявок.",
         reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
-    )
+    )'''
+
+
+def Broadcast(slovar):
+    today = date.today()
+    slovar['time'] = str(today)
+    with open('users.json', 'w', encoding='utf-8') as file:
+        json.dump(slovar, file, ensure_ascii=False, indent=4)
 
 
 def main() -> None:
@@ -181,7 +194,7 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
 
     # Обработчик для кнопки "Мои заявки"
-    application.add_handler(MessageHandler(filters.Regex("^Мои заявки$"), show_my_requests))
+    '''application.add_handler(MessageHandler(filters.Regex("^Мои заявки$"), show_my_requests))'''
 
     # Обработчик диалога создания заявки
     conv_handler = ConversationHandler(
