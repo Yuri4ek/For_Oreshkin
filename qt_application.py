@@ -2,9 +2,38 @@ import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidget, QTableWidgetItem, QVBoxLayout, \
     QWidget, QToolBar, QAction, QDialog, QFormLayout, QLineEdit, QTextEdit, QPushButton, QDateEdit, \
     QMessageBox, QFileDialog
-from PyQt5.QtCore import QDate, Qt
+from PyQt5.QtCore import QDate, Qt, pyqtSignal, QObject
 import sqlite3
 import pandas as pd
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+import json
+
+
+class SignalEmitter(QObject):
+    data_updated = pyqtSignal()
+
+
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length)
+        data = json.loads(post_data.decode('utf-8'))
+
+        # Добавляем данные в базу SQLite
+        window.add_record_from_json(
+            data.get('type', ''),
+            data.get('description', ''),
+            data.get('user', ''),
+            '',  # repairer_name пока пустой
+            data.get('time', QDate.currentDate().toString("yyyy-MM-dd"))
+        )
+
+        # Отправляем ответ
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Data received")
 
 
 class RepairDialog(QDialog):
@@ -40,7 +69,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Учет ремонтов")
-        self.resize(1200, 800)  # Увеличение размера окна
+        self.resize(1200, 800)
         self.table = QTableWidget(self)
         self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels(
@@ -49,15 +78,12 @@ class MainWindow(QMainWindow):
         self.table.setColumnHidden(0, True)
         self.table.cellDoubleClicked.connect(self.edit_record)
         self.table.cellClicked.connect(self.show_issue_description)
-
-        # Установка ширины столбцов
-        self.table.setColumnWidth(1, 200)  # Тип устройства
-        self.table.setColumnWidth(2, 300)  # Сообщение о поломке
-        self.table.setColumnWidth(3, 200)  # Человек (ФИО)
-        self.table.setColumnWidth(4, 200)  # Ремонтник (ФИО)
-        self.table.setColumnWidth(5, 150)  # Дата запроса
-        self.table.setColumnWidth(6, 100)  # Действия
-
+        self.table.setColumnWidth(1, 200)
+        self.table.setColumnWidth(2, 300)
+        self.table.setColumnWidth(3, 200)
+        self.table.setColumnWidth(4, 200)
+        self.table.setColumnWidth(5, 150)
+        self.table.setColumnWidth(6, 100)
         self.setCentralWidget(self.table)
 
         self.toolbar = QToolBar("Действия")
@@ -78,6 +104,7 @@ class MainWindow(QMainWindow):
         self.view_excel_action.triggered.connect(self.view_excel_file)
         self.toolbar.addAction(self.view_excel_action)
 
+        # Инициализация базы данных
         self.conn = sqlite3.connect("repairs.db")
         self.cursor = self.conn.cursor()
         self.cursor.execute("""
@@ -93,9 +120,24 @@ class MainWindow(QMainWindow):
         self.conn.commit()
         self.load_data()
 
+        # Настройка сигнала для обновления GUI
+        self.emitter = SignalEmitter()
+        self.emitter.data_updated.connect(self.load_data)
+
+        # Запускаем HTTP-сервер в отдельном потоке
+        self.server_thread = Thread(target=self.run_server)
+        self.server_thread.daemon = True
+        self.server_thread.start()
+
+    def run_server(self):
+        server = HTTPServer(('localhost', 5000), RequestHandler)
+        server.serve_forever()
+
     def load_data(self):
-        self.cursor.execute("SELECT * FROM repairs")
-        rows = self.cursor.fetchall()
+        conn = sqlite3.connect("repairs.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM repairs")
+        rows = cursor.fetchall()
         self.table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             self.table.setItem(i, 0, QTableWidgetItem(str(row[0])))
@@ -104,9 +146,12 @@ class MainWindow(QMainWindow):
             delete_button = QPushButton("Удалить")
             delete_button.clicked.connect(lambda checked, r=i: self.delete_record(r))
             self.table.setCellWidget(i, 6, delete_button)
+        conn.close()
 
     def save_data(self):
         try:
+            conn = sqlite3.connect("repairs.db")
+            cursor = conn.cursor()
             data = [[self.table.item(i, j).text() for j in range(1, 6)]
                     for i in range(self.table.rowCount())]
             df = pd.DataFrame(data, columns=["Тип устройства", "Сообщение о поломке",
@@ -116,6 +161,7 @@ class MainWindow(QMainWindow):
             if file_path:
                 df.to_excel(file_path, index=False)
                 QMessageBox.information(self, "Успех", f"Данные выгружены в {file_path}")
+            conn.close()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -129,11 +175,27 @@ class MainWindow(QMainWindow):
                 dialog.repairer_name.text(),
                 dialog.request_date.date().toString("yyyy-MM-dd")
             )
-            self.cursor.execute(
+            conn = sqlite3.connect("repairs.db")
+            cursor = conn.cursor()
+            cursor.execute(
                 "INSERT INTO repairs (device_type, issue_description, client_name, repairer_name, request_date) VALUES (?, ?, ?, ?, ?)",
                 data)
-            self.conn.commit()
+            conn.commit()
+            conn.close()
             self.load_data()
+
+    def add_record_from_json(self, device_type, issue_description, client_name, repairer_name,
+                             request_date):
+        data = (device_type, issue_description, client_name, repairer_name, request_date)
+        conn = sqlite3.connect("repairs.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO repairs (device_type, issue_description, client_name, repairer_name, request_date) VALUES (?, ?, ?, ?, ?)",
+            data)
+        conn.commit()
+        conn.close()
+        # Вызываем сигнал для обновления GUI в главном потоке
+        self.emitter.data_updated.emit()
 
     def edit_record(self, row, column):
         if column == 6:
@@ -152,10 +214,13 @@ class MainWindow(QMainWindow):
                     dialog.request_date.date().toString("yyyy-MM-dd"),
                     record_id
                 )
-                self.cursor.execute(
+                conn = sqlite3.connect("repairs.db")
+                cursor = conn.cursor()
+                cursor.execute(
                     "UPDATE repairs SET device_type=?, issue_description=?, client_name=?, repairer_name=?, request_date=? WHERE id=?",
                     new_data)
-                self.conn.commit()
+                conn.commit()
+                conn.close()
                 self.load_data()
 
     def show_issue_description(self, row, column):
@@ -167,8 +232,11 @@ class MainWindow(QMainWindow):
         id_item = self.table.item(row, 0)
         if id_item:
             record_id = int(id_item.text())
-            self.cursor.execute("DELETE FROM repairs WHERE id=?", (record_id,))
-            self.conn.commit()
+            conn = sqlite3.connect("repairs.db")
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM repairs WHERE id=?", (record_id,))
+            conn.commit()
+            conn.close()
             self.load_data()
 
     def delete_all_records(self):
@@ -176,8 +244,11 @@ class MainWindow(QMainWindow):
                                      "Вы уверены, что хотите удалить все записи?",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
-            self.cursor.execute("DELETE FROM repairs")
-            self.conn.commit()
+            conn = sqlite3.connect("repairs.db")
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM repairs")
+            conn.commit()
+            conn.close()
             self.load_data()
 
     def view_excel_file(self):
@@ -209,6 +280,8 @@ class MainWindow(QMainWindow):
                                                        "Excel files (*.xlsx *.xls)")
             if file_path:
                 df = pd.read_excel(file_path)
+                conn = sqlite3.connect("repairs.db")
+                cursor = conn.cursor()
                 for index, row in df.iterrows():
                     data = (
                         row["Тип устройства"],
@@ -217,11 +290,12 @@ class MainWindow(QMainWindow):
                         row["Ремонтник (ФИО)"],
                         row["Дата запроса"]
                     )
-                    self.cursor.execute(
+                    cursor.execute(
                         "INSERT INTO repairs (device_type, issue_description, client_name, repairer_name, request_date) "
                         "VALUES (?, ?, ?, ?, ?)", data
                     )
-                self.conn.commit()
+                conn.commit()
+                conn.close()
                 self.load_data()
                 QMessageBox.information(self, "Успех", "Данные загружены из файла")
         except Exception as e:

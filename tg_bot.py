@@ -1,7 +1,7 @@
 import logging
 import json
+import requests
 from config import BOT_TOKEN
-
 from dotenv import load_dotenv
 from datetime import date
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -123,29 +123,44 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Обрабатывает подтверждение заявки"""
     user = update.message.from_user
     if update.message.text.lower() == 'да':
-        # Здесь можно добавить сохранение заявки в базу данных
-        # или отправку уведомления администратору
+        # Формируем данные для отправки
+        request_data = context.user_data.copy()
+        request_data["user"] = user.full_name
+        request_data["time"] = str(date.today())
 
-        await update.message.reply_text(
-            "✅ Ваша заявка принята! Мы свяжемся с вами в ближайшее время.",
-            reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
+        # Отправляем JSON в Qt приложение
+        try:
+            response = requests.post("http://localhost:5000/receive", json=request_data)
+            if response.status_code == 200:
+                await update.message.reply_text(
+                    "✅ Ваша заявка принята и отправлена в приложение! Мы свяжемся с вами в ближайшее время.",
+                    reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Ошибка при отправке заявки в приложение.",
+                    reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+                )
+        except Exception as e:
+            logger.error("Ошибка отправки: %s", e)
+            await update.message.reply_text(
+                "❌ Ошибка при отправке заявки: сервер не отвечает.",
+                reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+            )
 
-        # Логирование заявки (можно заменить на запись в БД)
+        # Логирование заявки
         logger.info(
             "Новая заявка:\n"
             f"Пользователь: {user.full_name} (ID: {user.id})\n"
             f"Тип предмета: {context.user_data['type']}\n"
             f"Описание: {context.user_data['description']}\n"
-            f"Контакты: {context.user_data['contact']}")
-
-        request_data = context.user_data
-        request_data["user"] = user.full_name
-        Broadcast(request_data)
+            f"Контакты: {context.user_data['contact']}"
+        )
     else:
         await update.message.reply_text(
             "❌ Заявка отменена. Вы можете создать новую заявку.",
-            reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True))
-
+            reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
+        )
         # Очищаем данные пользователя
         context.user_data.clear()
     return ConversationHandler.END
@@ -159,44 +174,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "❌ Создание заявки отменено.",
         reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
     )
-
     # Очищаем данные пользователя
     context.user_data.clear()
     return ConversationHandler.END
 
 
-'''async def show_my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает заявки пользователя (заглушка)"""
-    # В реальном боте здесь должна быть логика получения заявок пользователя из БД
-    await update.message.reply_text(
-        "📋 Ваши последние заявки:\n\n"
-        "1. Ремонт компьютера - в обработке\n"
-        "2. Замена экрана телефона - выполнено\n\n"
-        "Здесь будет отображаться история ваших заявок.",
-        reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
-    )'''
-
-
-def Broadcast(slovar):
-    today = date.today()
-    slovar['time'] = str(today)
-    with open('users.json', 'w', encoding='utf-8') as file:
-        json.dump(slovar, file, ensure_ascii=False, indent=4)
-
-
 def main() -> None:
     """Запуск бота"""
-    # Замените 'YOUR_BOT_TOKEN' на токен вашего бота
     application = Application.builder().token(BOT_TOKEN).build()
-
-    # Обработчик для обычных команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-
-    # Обработчик для кнопки "Мои заявки"
-    '''application.add_handler(MessageHandler(filters.Regex("^Мои заявки$"), show_my_requests))'''
-
-    # Обработчик диалога создания заявки
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Создать заявку$"), start_request)],
         states={
@@ -207,10 +194,7 @@ def main() -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-
     application.add_handler(conv_handler)
-
-    # Запускаем бота
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
