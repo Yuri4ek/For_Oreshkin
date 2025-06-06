@@ -33,12 +33,12 @@ item_keyboard = [
 main_keyboard = [["Создать заявку"], ["Помощь"]]
 
 load_dotenv()
-# Запускаем логгирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.DEBUG
 )
-request_data = {}
 
+# URL Flask-сервера (замените на актуальный домен/IP и порт при хостинге)
+FLASK_URL = "http://192.168.1.103:5000/receive"  # При хостинге: "https://your-domain.com/receive"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение и показывает главное меню"""
@@ -48,7 +48,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Выберите действие:",
         reply_markup=reply_markup
     )
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет справку о работе бота"""
@@ -62,7 +61,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Вы можете просмотреть свои заявки, нажав 'Мои заявки'"
     )
 
-
 async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает процесс создания заявки"""
     reply_markup = ReplyKeyboardMarkup(item_keyboard, resize_keyboard=True)
@@ -71,7 +69,6 @@ async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         reply_markup=reply_markup
     )
     return TYPE
-
 
 async def type_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет тип предмета и запрашивает описание проблемы"""
@@ -85,7 +82,6 @@ async def type_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     return DESCRIPTION
 
-
 async def description_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет описание проблемы и запрашивает контактные данные"""
     user = update.message.from_user
@@ -97,14 +93,12 @@ async def description_received(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return CONTACT
 
-
 async def contact_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Сохраняет контактные данные и показывает подтверждение"""
     user = update.message.from_user
     context.user_data['contact'] = update.message.text
     logger.info("Контакт от %s: %s", user.first_name, update.message.text)
 
-    # Формируем сообщение с подтверждением
     request_info = (
         "📝 Ваша заявка:\n\n"
         f"Тип предмета: {context.user_data['type']}\n"
@@ -115,22 +109,17 @@ async def contact_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     reply_markup = ReplyKeyboardMarkup([["Да", "Нет"]], resize_keyboard=True)
     await update.message.reply_text(request_info, reply_markup=reply_markup)
-
     return CONFIRM
-
 
 async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает подтверждение заявки"""
     user = update.message.from_user
     if update.message.text.lower() == 'да':
-        # Формируем данные для отправки
         request_data = context.user_data.copy()
         request_data["user"] = user.full_name
         request_data["time"] = str(date.today())
-
-        # Отправляем JSON в Qt приложение
         try:
-            response = requests.post("http://localhost:5000/receive", json=request_data)
+            response = requests.post(FLASK_URL, json=request_data, timeout=5)
             if response.status_code == 200:
                 await update.message.reply_text(
                     "✅ Ваша заявка принята и отправлена в приложение! Мы свяжемся с вами в ближайшее время.",
@@ -138,7 +127,7 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
             else:
                 await update.message.reply_text(
-                    "❌ Ошибка при отправке заявки в приложение.",
+                    f"❌ Ошибка при отправке заявки: {response.status_code}",
                     reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
                 )
         except Exception as e:
@@ -147,8 +136,6 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "❌ Ошибка при отправке заявки: сервер не отвечает.",
                 reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
             )
-
-        # Логирование заявки
         logger.info(
             "Новая заявка:\n"
             f"Пользователь: {user.full_name} (ID: {user.id})\n"
@@ -161,10 +148,8 @@ async def confirm_request(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "❌ Заявка отменена. Вы можете создать новую заявку.",
             reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
         )
-        # Очищаем данные пользователя
         context.user_data.clear()
     return ConversationHandler.END
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет процесс создания заявки"""
@@ -174,10 +159,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "❌ Создание заявки отменено.",
         reply_markup=ReplyKeyboardMarkup(main_keyboard, resize_keyboard=True)
     )
-    # Очищаем данные пользователя
     context.user_data.clear()
     return ConversationHandler.END
-
 
 def main() -> None:
     """Запуск бота"""
@@ -196,7 +179,6 @@ def main() -> None:
     )
     application.add_handler(conv_handler)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
